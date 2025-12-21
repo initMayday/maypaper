@@ -16,8 +16,10 @@ Maypaper includes 3 binaries, `maypaper`, `mypctl` and `myppm`.
 ### myppm
 `myppm` is the package manager for maypaper, in the sense that it manages wallpapers for you. It does a partial clones of git repositories (you specify the folders you want), and keeps them updated. Run `myppm --help` to get a list of all arguments. Upon the first run of `myppm`, a configuration directory will be created at `$XDG_RUNTIME_DIR/maypaper`, where a file called `wallpapers.toml` will exist. Within there, you can specify the wallpapers you wish to be declaratively managed by `myppm`.
 
-## General
-You can make your own repository for wallpapers, use someone else's, or alternatively, here exists a repository under my control which may be of use to you: {}. Just to reinforce, it is completely decentralised, `myppm` makes no assumptions about what repository you are using.
+## Getting Wallpapers
+You can make your own repository for wallpapers, use someone else's.
+Alternatively, here exists a repository under I manage: [Maywalls](https://github.com/initMayday/maywalls).
+Just to reinforce, it is completely decentralised, `myppm` makes no assumptions about what repository you are using.
 
 ## Packages
 
