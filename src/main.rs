@@ -1,32 +1,60 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gtk4::glib::object::Cast;
-use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
-use gtk4::{Application, glib};
-
-use gtk4::gdk::prelude::{DisplayExt, MonitorExt};
-use gtk4::gio::prelude::ListModelExt;
-use gtk4::{gdk, gio};
+use qmetaobject::prelude::*;
+use qmetaobject::{QObjectBox, QString, QStringList, QUrl, QVariant, queued_callback};
 
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info};
-use webkit6::WebView;
-use webkit6::prelude::WebViewExt;
 
 use crate::event::{
-    AcquireServer, IpcEvent, ReleaseServer, SetWebview, TokioEvent, UiCmd, UiEvent, WebCmd,
-    WebEvent,
+    AcquireServer, IpcEvent, ReleaseServer, RequestServer, RequestWebview, SetWebview, TokioEvent,
+    UiCmd, UiEvent, WebCmd, WebEvent,
 };
 
 mod event;
 mod ipc;
 mod webserver;
-mod webview;
 
+const QML: &str = include_str!("webview.qml");
+
+// --- Shared state from UI -> tokio
+#[derive(Clone, Default)]
+struct SyncData {
+    connectors: Vec<String>,
+}
+
+#[allow(non_snake_case)]
+#[derive(QObject, Default)]
+struct Bridge {
+    base: qt_base_class!(trait QObject),
+
+    sync_tx: Option<watch::Sender<Arc<SyncData>>>,
+
+    // Called from QML, it gives us the connector names whenever they update
+    setMonitorNames: qt_method!(
+        fn setMonitorNames(&self, names: QStringList) {
+            let qs: Vec<QString> = names.into();
+            let connectors: Vec<String> = qs.into_iter().map(|q| q.to_string()).collect();
+
+            if let Some(sync_tx) = &self.sync_tx {
+                let _ = sync_tx.send(Arc::new(SyncData {
+                    connectors: connectors.clone(),
+                }));
+            }
+
+            info!("Monitors:");
+            for (i, c) in connectors.iter().enumerate() {
+                info!("  {i}: {c}");
+            }
+        }
+    ),
+}
+
+// --- Tokio runtime thread ---
 fn start_tokio(
-    ui_tx: async_channel::Sender<UiCmd>,
-    bg_rx: async_channel::Receiver<UiEvent>,
+    ui_tx: mpsc::UnboundedSender<UiCmd>,
+    mut ui_event_rx: mpsc::UnboundedReceiver<UiEvent>,
     synx_rx: watch::Receiver<Arc<SyncData>>,
 ) {
     std::thread::spawn(move || {
@@ -37,90 +65,47 @@ fn start_tokio(
 
         rt.block_on(async move {
             let (tokio_tx, mut tokio_rx) = mpsc::unbounded_channel::<TokioEvent>();
-
-            //let (ipc_tx, ipc_rx) = mpsc::unbounded_channel();
             let (web_tx, web_rx) = mpsc::unbounded_channel::<WebCmd>();
 
-            // Each spawned task can take: tokio_tx, their_own_rx, if they need it
             tokio::spawn(ipc::ipc_server(tokio_tx.clone()));
             info!(target: "tokio", "Started ipc_server");
+
             tokio::spawn(webserver::web_manager(tokio_tx.clone(), web_rx));
             info!(target: "tokio", "Started web_manager");
 
             loop {
                 tokio::select! {
-                    bg = bg_rx.recv() => {
-                        debug!(target: "tokio", "Received an event from glib");
-                        match bg {
-                            Ok(event) => {
-                                match event {
-                                    UiEvent::ReleaseServer(release_server) => {
-                                        debug!(target: "tokio", release_server = ?release_server, "Received");
-                                        debug!(target: "tokio", "Forwarding to webserver");
-                                        let _ = web_tx.send(WebCmd::ReleaseServer(release_server));
-                                    },
-                                }
+                    ui_evt = ui_event_rx.recv() => {
+                        match ui_evt {
+                            Some(UiEvent::ReleaseServer(release_server)) => {
+                                debug!(target: "tokio", release_server=?release_server, "Received from UI");
+                                let _ = web_tx.send(WebCmd::ReleaseServer(release_server));
                             }
-                            Err(_) => {}
+                            None => break,
                         }
                     }
 
                     tk = tokio_rx.recv() => {
                         match tk {
-                            Some(event) => {
-                                match event {
-                                    TokioEvent::IpcEvent(ipc_event) => match ipc_event {
-                                        IpcEvent::RequestServer(request_server) => {
-                                            debug!(target: "tokio", request_server = ?request_server, "Received");
-                                            debug!(target: "tokio", "Parsing to webserver");
-                                            if request_server.connector.is_some() {
-                                                let acquire = AcquireServer {
-                                                    path: request_server.path.clone(),
-                                                    connector: request_server.connector.unwrap(),
-                                                };
-                                                let _ = web_tx.send(WebCmd::AcquireServer(acquire));
-                                            } else {
-                                                let sync: Arc<SyncData> = synx_rx.borrow().clone();
-                                                for connector in sync.connectors.iter() {
-                                                    let acquire = AcquireServer {
-                                                        path: request_server.path.clone(),
-                                                        connector: connector.clone(),
-                                                    };
-                                                    let _ = web_tx.send(WebCmd::AcquireServer(acquire));
-                                                }
-                                            }
-                                        },
-                                        IpcEvent::RequestWebview(request_webview) => {
-                                            debug!(target: "tokio", request_webview = ?request_webview, "Received");
-                                            if request_webview.connector.is_some() {
-                                                let set_webview = SetWebview {
-                                                    url: request_webview.url,
-                                                    path: None,
-                                                    connector: request_webview.connector.unwrap(),
-                                                };
-                                                let _ = ui_tx.send(UiCmd::SetWebview(set_webview)).await;
-                                            } else {
-                                                let sync: Arc<SyncData> = synx_rx.borrow().clone();
-                                                for connector in sync.connectors.iter() {
-                                                    let set_webview = SetWebview {
-                                                        url: request_webview.url.clone(),
-                                                        path: None,
-                                                        connector: connector.clone(),
-                                                    };
-                                                    let _ = ui_tx.send(UiCmd::SetWebview(set_webview)).await;
-                                                }
-                                            }
-                                        }
-                                    },
-                                    TokioEvent::WebEvent(web_event) => match web_event {
-                                        WebEvent::SetWebview(set_webview) => {
-                                            debug!(target: "tokio", set_webview = ?set_webview, "Received");
-                                            debug!(target: "tokio", "Forwarding to glib");
-                                            let _ = ui_tx.send(UiCmd::SetWebview(set_webview)).await;
-                                        }
-                                    },
-                                }
-                            }
+                            Some(event) => match event {
+                                TokioEvent::IpcEvent(ipc_event) => match ipc_event {
+                                    IpcEvent::RequestServer(request_server) => {
+                                        debug!(target: "tokio", request_server=?request_server, "Received");
+                                        handle_request_server(request_server, &synx_rx, &web_tx);
+                                    }
+                                    IpcEvent::RequestWebview(request_webview) => {
+                                        debug!(target: "tokio", request_webview=?request_webview, "Received");
+                                        handle_request_webview(request_webview, &synx_rx, &ui_tx);
+                                    }
+                                },
+
+                                TokioEvent::WebEvent(web_event) => match web_event {
+                                    WebEvent::SetWebview(set_webview) => {
+                                        debug!(target: "tokio", set_webview=?set_webview, "WebEvent -> UI");
+                                        let _ = ui_tx.send(UiCmd::SetWebview(set_webview));
+                                    }
+                                },
+                            },
                             None => break,
                         }
                     }
@@ -130,117 +115,122 @@ fn start_tokio(
     });
 }
 
-fn main() -> glib::ExitCode {
+fn handle_request_server(
+    request_server: RequestServer,
+    synx_rx: &watch::Receiver<Arc<SyncData>>,
+    web_tx: &mpsc::UnboundedSender<WebCmd>,
+) {
+    if let Some(connector) = request_server.connector.clone() {
+        let acquire = AcquireServer {
+            path: request_server.path,
+            connector,
+        };
+        let _ = web_tx.send(WebCmd::AcquireServer(acquire));
+    } else {
+        let sync: Arc<SyncData> = synx_rx.borrow().clone();
+        for connector in sync.connectors.iter() {
+            let acquire = AcquireServer {
+                path: request_server.path.clone(),
+                connector: connector.clone(),
+            };
+            let _ = web_tx.send(WebCmd::AcquireServer(acquire));
+        }
+    }
+}
+
+fn handle_request_webview(
+    request_webview: RequestWebview,
+    synx_rx: &watch::Receiver<Arc<SyncData>>,
+    ui_tx: &mpsc::UnboundedSender<UiCmd>,
+) {
+    if let Some(connector) = request_webview.connector.clone() {
+        let set_webview = SetWebview {
+            url: request_webview.url,
+            path: None,
+            connector,
+        };
+        let _ = ui_tx.send(UiCmd::SetWebview(set_webview));
+    } else {
+        let sync: Arc<SyncData> = synx_rx.borrow().clone();
+        for connector in sync.connectors.iter() {
+            let set_webview = SetWebview {
+                url: request_webview.url.clone(),
+                path: None,
+                connector: connector.clone(),
+            };
+            let _ = ui_tx.send(UiCmd::SetWebview(set_webview));
+        }
+    }
+}
+
+fn main() {
     if cfg!(debug_assertions) {
         tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO) // INFO, WARN, ERROR
+            .with_max_level(tracing::Level::INFO)
             .init();
     }
 
-    // Set GSK_RENDERER to gl, otherwise performance is bombed
-    // for many users, if the user wants to modify it, they can
-    // simply set it before running the program
-    if std::env::var_os("GSK_RENDERER").is_none() {
-        unsafe {
-            std::env::set_var("GSK_RENDERER", "gl");
-        }
-    }
+    // unsafe { std::env::set_var("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell") };
+    // unsafe { std::env::set_var("QT_QPA_PLATFORM", "wayland") };
 
-    let app = Application::builder()
-        .application_id("com.example.wallpaper")
-        .build();
-
-    // Tokio is sender
-    let (ui_tx, ui_rx) = async_channel::unbounded::<UiCmd>();
-
-    // Glib is sender
-    let (bg_tx, bg_rx) = async_channel::unbounded::<UiEvent>();
-
-    // Synchronised data from the UI to tokio. Key is connector
+    let (ui_tx, mut ui_rx) = mpsc::unbounded_channel::<UiCmd>();
+    let (ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<UiEvent>();
     let (sync_tx, sync_rx) = watch::channel(Arc::new(SyncData::default()));
 
-    info!(target: "main", "Starting Tokio");
-    start_tokio(ui_tx, bg_rx, sync_rx);
+    info!(target: "main", "Starting tokio thread");
+    start_tokio(ui_tx.clone(), ui_event_rx, sync_rx.clone());
 
-    // Run application, this function is not fn-once which is why we use
-    // async channels over doing acrobatics for tokio's mpsc
-    info!(target: "main", "Starting UI");
-    app.connect_startup(move |app| build_ui(app, bg_tx.clone(), ui_rx.clone(), sync_tx.clone()));
-    app.connect_activate(|_app| {}); // Empty handler to suppress glib warning
-    app.run()
-}
+    // The following QT stuff is quite unrusty, but we'll migrate to QT
+    // BRIDGES whenever that releases
+    info!(target: "main", "Starting Qt/QML UI");
+    let mut engine = QmlEngine::new();
+    let bridge = QObjectBox::new(Bridge::default());
+    let bridge_pinned = bridge.pinned();
+    bridge_pinned.borrow_mut().sync_tx = Some(sync_tx.clone());
+    engine.set_object_property("bridge".into(), bridge_pinned);
 
-#[derive(Clone, Default)]
-struct SyncData {
-    connectors: Vec<String>,
-}
+    engine.load_data(QML.into());
 
-struct Instance {
-    webview: WebView,
-    wallpaper_path: Option<String>,
-}
+    let engine_ptr: *mut QmlEngine = &mut engine;
+    let qt_set_wallpaper = queued_callback(move |(connector, url): (QString, QString)| unsafe {
+        let qurl = QUrl::from_user_input(url);
+        let args = [QVariant::from(connector), QVariant::from(qurl)];
+        (&mut *engine_ptr).invoke_method_noreturn(QByteArray::from("setWallpaper"), &args);
+    });
 
-fn build_ui(
-    app: &Application,
-    bg_tx: async_channel::Sender<UiEvent>,
-    ui_rx: async_channel::Receiver<UiCmd>,
-    sync_tx: watch::Sender<Arc<SyncData>>,
-) {
-    // Build one window+webview per monitor
-    let display = gdk::Display::default().expect("No GDK display");
-    let monitors: gio::ListModel = display.monitors();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build ui adapter runtime");
 
-    // Key is the connector
-    let mut instances: HashMap<String, Instance> = HashMap::new();
-    let mut sync_data: SyncData = SyncData::default();
+        rt.block_on(async move {
+            let mut last_paths: HashMap<String, Option<String>> = HashMap::new();
 
-    for i in 0..monitors.n_items() {
-        let monitor = monitors
-            .item(i)
-            .expect("Missing monitor item")
-            .downcast::<gdk::Monitor>()
-            .expect("Item wasn't a gdk::Monitor");
+            while let Some(cmd) = ui_rx.recv().await {
+                match cmd {
+                    UiCmd::SetWebview(set_webview) => {
+                        let entry = last_paths
+                            .entry(set_webview.connector.clone())
+                            .or_insert(None);
 
-        let webview = webview::build_ui_for_monitor(app, &monitor, i);
-        let connector = monitor.connector().unwrap_or_default().to_string();
+                        let old_path = entry.clone();
+                        *entry = set_webview.path.clone();
 
-        info!(target: "ui", connector = %connector, "Got Connector");
-        instances.insert(
-            connector.clone(),
-            Instance {
-                webview,
-                wallpaper_path: None,
-            },
-        );
-        sync_data.connectors.push(connector);
-    }
-    sync_tx.send(Arc::new(sync_data)).unwrap();
+                        if let Some(old) = old_path {
+                            let _ = ui_event_tx
+                                .send(UiEvent::ReleaseServer(ReleaseServer { path: old }));
+                        }
 
-    // Receive loop on GTK thread
-    glib::MainContext::default().spawn_local(async move {
-        while let Ok(event) = ui_rx.recv().await {
-            debug!(target: "glib", "Received an event from tokio");
-            match event {
-                UiCmd::SetWebview(set_webview) => {
-                    debug!(target: "glib", set_webview = ?set_webview, "Received");
-                    let inst = instances.get_mut(&set_webview.connector).unwrap(); // TODO - WE
-                                                                                   // DON'T KNOW IF
-                                                                                   // THIS WILL
-                                                                                   // FAIL!
-                    let old_path: Option<String> = inst.wallpaper_path.clone();
-                    inst.wallpaper_path = set_webview.path.clone();
-                    if let Some(path) = old_path {
-                        let release_server = ReleaseServer { path };
-                        debug!(target: "glib", release_server=?release_server, "Sending");
-                        let _ = bg_tx.send(UiEvent::ReleaseServer(release_server)).await;
-                        debug!(target: "glib", "Finished Send");
+                        qt_set_wallpaper((
+                            QString::from(set_webview.connector),
+                            QString::from(set_webview.url),
+                        ));
                     }
-                    inst.webview.load_uri(&set_webview.url);
-                    debug!(target: "glib", url = %&set_webview.url, "Loaded")
                 }
             }
-        }
-
-        debug!("IPC channel closed");
+        });
     });
+
+    engine.exec();
 }
