@@ -5,15 +5,15 @@ use anyhow::Result;
 
 use clap::{Parser, Subcommand};
 use maypaper::event::Ipc;
-use maypaper::{Paths, get_default_socket_path};
+use maypaper::{get_default_socket_path};
 use tracing::error;
 
 #[derive(Parser, Debug)]
 #[command(name = "mypctl", version, about = "Control maypaper via IPC")]
 struct Cli {
     /// The config directory. If left unspecified, XDG_CONFIG_HOME/maypaper is used
-#[arg(long)]
-    config_dir: Option<PathBuf>,
+//#[arg(long)]
+    //config_dir: Option<PathBuf>,
 
     /// Path to the maypaper IPC socket (defaults to /run/user/<uid>/maypaper.sock)
     #[arg(long, value_name = "PATH")]
@@ -52,8 +52,8 @@ fn send_msg(socket_path: &PathBuf, msg: &Ipc) -> io::Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let paths = Paths::get_dirs(cli.config_dir)?;
-    paths.ensure_dirs()?;
+    //let paths = Paths::get_dirs(cli.config_dir)?;
+    //paths.ensure_dirs()?;
     let socket_path = cli.socket.unwrap_or_else(get_default_socket_path);
 
     let msg = match cli.cmd {
