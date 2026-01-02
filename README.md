@@ -1,5 +1,5 @@
 # Maypaper
-The super dynamic wallpaper tool!
+*A webpage as a wallpaper? All local? How preposterous* 
 
 
 https://github.com/user-attachments/assets/e5fda2fb-4649-4fdb-ab92-9d1d9f168a0f
@@ -8,10 +8,10 @@ https://github.com/user-attachments/assets/e5fda2fb-4649-4fdb-ab92-9d1d9f168a0f
 
 
 ## Introduction
-Maypaper is a tool which allows you to put a webpage (ideally locally installed, or remote) as your wallpaper, using webkitgtk. It comes with accompanying tools to manage the installation and updates of wallpapers, although these are entirely optional.
+Maypaper is a tool which allows you to put a webpage (ideally locally installed, or remote) as your wallpaper, using QT's webengine (chromium). If local, it automatically starts a webserver to serve that page, and spins it down as required.
 
 ## Usage
-Maypaper includes 3 binaries, `maypaper`, `mypctl` and `myppm`.
+Maypaper includes 3 binaries, `maypaper`, `mypctl` and `myptmp`.
 
 ### maypaper
 `maypaper` is the main binary, which runs the wallpaper program. Run `maypaper --help` to get a list of all arguments. `maypaper` is configured purely over IPC, or by arguments and has no direct configuration file.
@@ -19,18 +19,13 @@ Maypaper includes 3 binaries, `maypaper`, `mypctl` and `myppm`.
 ### mypctl
 `mypctl` is the control tool for maypaper, that communicates with it over IPC. Run `mypctl --help` to get a list of all arguments.
 
-### myppm
-`myppm` is the package manager for maypaper, in the sense that it manages wallpapers for you. It does a partial clones of git repositories (you specify the folders you want), and keeps them updated. Run `myppm --help` to get a list of all arguments. Upon the first run of `myppm`, a configuration directory will be created at `$XDG_RUNTIME_DIR/maypaper`, where a file called `wallpapers.toml` will exist. Within there, you can specify the wallpapers you wish to be declaratively managed by `myppm`.
-
-## Getting Wallpapers
-You can make your own repository for wallpapers, use someone else's.  
-Alternatively, here exists a repository under I manage: [Maywalls](https://github.com/initMayday/maywalls).  
-Just to reinforce, it is completely decentralised, `myppm` makes no assumptions about what repository you are using.
+### mytmp
+`myptmp` generates local websites for you, based on templates and arguments you give it. Run `myptmp --help` to get a list of all arguments.
 
 ## Packages
-
-## Contributing
-Thanks for considering to contribute! Please read [Contributing.md](Contributing.md) to get an overview of the project, goals, and other information!
+| Repo | Source |
+| :--: | :--: |
+| Arch User Repository | [Link](https://aur.archlinux.org/packages/maypaper) |
 
 ##  Licensing
 The projects's source code is licensed under `AGPL-3.0-or-later`  
