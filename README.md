@@ -34,3 +34,6 @@ The projects's source code is licensed under `AGPL-3.0-or-later`
 The branding (eg. project name, logos etc.) is not covered by the aforementioned license, and remains the sole property of initMayday. Please seek permission from myself before using it, if required, to determine if it is an acceptable use case. Reasonable descriptive use (eg. packaging, articles, etc.) is an example of an acceptable use case. If there are any queries regarding this, please ask.  
 
 You can purchase the program for 5GBP (or equivalent) [here](https://github.com/initMayday/licensing/blob/master/payment.md)
+
+## Misc
+Join the [Discord](https://discord.gg/Gz4HgHFspK)
